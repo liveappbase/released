@@ -124,13 +124,14 @@ export async function resolveLookup(args: {
   }
 
   try {
-    const result = await singleFlight(key, async () => {
+    const compute = async () => {
       const re = await cache.getEntry<LookupResult>(key);
       if (re && isFresh(re)) return re.value;
       const r = await load();
       await cache.put(key, r, hardTtlFor(r));
       return r;
-    });
+    };
+    const result = cache.shared ? await singleFlight(key, compute) : await compute();
     return { status: 'ok', result, stale: false, staleAsOf: null, cached: false };
   } catch (err) {
     if (err instanceof NotYetReleasedError) return { status: 'not_yet', error: err };

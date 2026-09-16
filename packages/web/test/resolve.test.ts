@@ -39,6 +39,7 @@ function mkResult(opts: { released: boolean; partial?: boolean }): LookupResult 
 function makeFakeCache() {
   const store = new Map<string, { value: unknown; ageSeconds: number }>();
   const cache: WorkerCache = {
+    shared: true,
     async get<T>(key: string) {
       return (store.get(key)?.value as T) ?? null;
     },
@@ -252,5 +253,49 @@ describe('resolveLookup — real answers pass through', () => {
     const r = await resolveLookup({ cache: f.cache, key: KEY, load });
     expect(r.status).toBe('error');
     expect(f.has(negKey)).toBe(false);
+  });
+});
+
+describe('resolveLookup — a non-shared (user-PAT) cache never coalesces (#164)', () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it('an anonymous call concurrent with a PAT call on the same key computes its own answer', async () => {
+    const shared = makeFakeCache();
+    const pat = makeFakeCache();
+    const patCache: WorkerCache = { ...pat.cache, shared: false };
+    const anonCache: WorkerCache = { ...shared.cache, shared: true };
+    const privateAnswer = mkResult({ released: true, partial: false });
+    const publicAnswer = { ...mkResult({ released: false }), subject: 'public' } as LookupResult;
+    const patGate = deferred<LookupResult>();
+    const patLoad = vi.fn(() => patGate.promise);
+    const anonLoad = vi.fn(async () => publicAnswer);
+
+    const patP = resolveLookup({ cache: patCache, key: 'res:flight-164', load: patLoad });
+    const anonP = resolveLookup({ cache: anonCache, key: 'res:flight-164', load: anonLoad });
+    await new Promise((r) => setTimeout(r, 0));
+    patGate.resolve(privateAnswer);
+    const [, anon] = await Promise.all([patP, anonP]);
+
+    expect(anonLoad).toHaveBeenCalledOnce();
+    expect(anon).toMatchObject({ status: 'ok', result: { subject: 'public' } });
+  });
+
+  it('control: two shared calls on the same key still share one load', async () => {
+    const f = makeFakeCache();
+    const cache: WorkerCache = { ...f.cache, shared: true };
+    const gate = deferred<LookupResult>();
+    const load = vi.fn(() => gate.promise);
+    const a = resolveLookup({ cache, key: 'res:flight-164-ctl', load });
+    const b = resolveLookup({ cache, key: 'res:flight-164-ctl', load });
+    await new Promise((r) => setTimeout(r, 0));
+    gate.resolve(mkResult({ released: true }));
+    await Promise.all([a, b]);
+    expect(load).toHaveBeenCalledOnce();
   });
 });

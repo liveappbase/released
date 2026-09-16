@@ -54,13 +54,15 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
   // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
   try {
     const client = makeProvider(env, req, host);
-    result = await singleFlight(k, async () => {
+    const compute = async () => {
       const re = await cache.get<LookupResult>(k);
       if (re) return re;
       const r = await findRelease(input, { client });
       await cache.put(k, r, 30 * 60);
       return r;
-    });
+    };
+    // A user-token lookup must not share a flight with an anonymous one (#164).
+    result = cache.shared ? await singleFlight(k, compute) : await compute();
     return new Response(JSON.stringify(result), {
       headers: { 'content-type': 'application/json' },
     });

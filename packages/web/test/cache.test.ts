@@ -128,4 +128,34 @@ describe('makeWorkerCache', () => {
     const entry = await cache.getEntry('k');
     expect(entry?.ageSeconds).toBe(0);
   });
+  // #164: a lookup computed with the caller's own PAT may be a private repo's
+  // answer. It must never land in (or be served from) the anonymous shared slot
+  // that public permalinks, badges and OG cards read.
+  it.each(['x-user-github-token', 'x-user-gitlab-token'])(
+    'a request carrying %s gets a non-shared cache that never touches the store',
+    async (header) => {
+      const fake = installFakeCache();
+      const req = new Request('https://released-web.lukaso.workers.dev/api/lookup', {
+        headers: { [header]: 'ghp_private' },
+      });
+      const cache = makeWorkerCache(req);
+      await cache.put('k', { secret: true }, 1800);
+      expect(await cache.get('k')).toBeNull();
+      expect(await cache.getEntry('k')).toBeNull();
+      expect(cache.shared).toBe(false);
+      expect(fake.put).not.toHaveBeenCalled();
+      expect(fake.match).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a blank user-token header is not a token: the cache stays shared', async () => {
+    const fake = installFakeCache();
+    const req = new Request('https://released-web.lukaso.workers.dev/api/lookup', {
+      headers: { 'x-user-github-token': '   ' },
+    });
+    const cache = makeWorkerCache(req);
+    await cache.put('k', { x: 1 }, 1800);
+    expect(cache.shared).toBe(true);
+    expect(fake.put).toHaveBeenCalledOnce();
+  });
 });

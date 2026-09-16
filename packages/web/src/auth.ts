@@ -16,6 +16,16 @@ export function resolveToken(env: Env | undefined, req: Request): string | undef
   return undefined;
 }
 
+/** True when the caller brought their own provider token (either header). Such a
+ *  lookup may be a private repo's answer, so it must stay out of the anonymous
+ *  shared result cache (#164). Blank headers are ignored, as in the resolvers. */
+export function hasUserToken(req: Request): boolean {
+  return Boolean(
+    req.headers.get('x-user-github-token')?.trim() ||
+      req.headers.get('x-user-gitlab-token')?.trim(),
+  );
+}
+
 /** Resolve a provider API token for a given host. Honors per-host Worker secrets
  *  (GITLAB_TOKEN_<HOST>) so different self-hosted GitLab instances can use
  *  different PATs. */

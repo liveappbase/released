@@ -14,6 +14,7 @@
 // ourselves from the age — see resolve.ts.
 
 import type { CacheStore } from '@released/core';
+import { hasUserToken } from './auth.js';
 
 /** A cached value plus how long ago it was written (seconds). */
 export type CacheEntry<T> = { value: T; ageSeconds: number };
@@ -21,9 +22,25 @@ export type CacheEntry<T> = { value: T; ageSeconds: number };
 export type WorkerCache = CacheStore & {
   /** Like get(), but also reports the entry's age so callers can judge staleness. */
   getEntry<T>(key: string): Promise<CacheEntry<T> | null>;
+  /** False when the request carries a user token: nothing is read or written, and
+   *  callers must not coalesce its compute with anyone else's (single-flight). */
+  shared: boolean;
+};
+
+// A user-token lookup never touches the anonymous shared slot (#164).
+const unsharedCache: WorkerCache = {
+  shared: false,
+  async get() {
+    return null;
+  },
+  async getEntry() {
+    return null;
+  },
+  async put() {},
 };
 
 export function makeWorkerCache(req: Request, ttlSecondsDefault = 1800): WorkerCache {
+  if (hasUserToken(req)) return unsharedCache;
   const origin = new URL(req.url).origin;
   const keyUrl = (key: string) => `${origin}/__cache__/${encodeURIComponent(key)}`;
   const store = (caches as unknown as { default: Cache }).default;
@@ -33,6 +50,8 @@ export function makeWorkerCache(req: Request, ttlSecondsDefault = 1800): WorkerC
   }
 
   return {
+    shared: true,
+
     async get<T>(key: string): Promise<T | null> {
       const res = await match(key);
       if (!res) return null;
