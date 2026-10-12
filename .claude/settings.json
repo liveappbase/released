@@ -1,7 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
-    "allow": ["Bash(gh issue edit:*)", "Bash(gh label create:*)", "Bash(gh label edit:*)"]
+    "allow": [
+      "Bash(gh issue edit:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label edit:*)"
+    ]
   },
   "hooks": {
     "Stop": [
