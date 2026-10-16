@@ -22,9 +22,9 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
+    "@biomejs/biome": "^2.5.15",
     "@changesets/cli": "^2.31.1",
-    "publint": "^0.3.22",
+    "publint": "^0.3.25",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
