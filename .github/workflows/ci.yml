@@ -29,6 +29,7 @@ jobs:
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -71,6 +72,7 @@ jobs:
       - uses: actions/setup-go@v6.5.0
         with:
           go-version: stable
+          check-latest: true
 
       - name: Install osv-scanner
         run: |
@@ -113,6 +115,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+          check-latest: true
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -189,6 +192,7 @@ jobs:
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
+          check-latest: true
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
