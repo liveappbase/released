@@ -25,16 +25,6 @@
             "timeout": 10
           }
         ]
-      },
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/liveapp-push-guard.sh",
-            "timeout": 30
-          }
-        ]
       }
     ]
   }

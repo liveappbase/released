@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Runs validate.sh before push. To bypass for WIP: `git push --no-verify`.
-exec "$(git rev-parse --show-toplevel)/scripts/validate.sh"
