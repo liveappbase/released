@@ -26,8 +26,8 @@ export default defineConfig(async () => {
   if (NODE_MAJOR < WORKERD_POOL_MIN_NODE) {
     console.warn(
       `\n[web-og] workerd render tests require Node ${WORKERD_POOL_MIN_NODE}+ ` +
-        `(@cloudflare/vitest-pool-workers → miniflare → undici needs ` +
-        `node:worker_threads.markAsUncloneable, added in Node 22). ` +
+        `(@cloudflare/vitest-pool-workers → miniflare/wrangler declare ` +
+        `engines node >=22). ` +
         `Running on Node ${NODE_MAJOR}; skipping the render suite — ` +
         `it still runs on the node-${WORKERD_POOL_MIN_NODE} matrix cell.\n`,
     );
