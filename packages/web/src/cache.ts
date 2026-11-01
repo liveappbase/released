@@ -15,8 +15,16 @@
 
 import type { CacheStore } from '@released/core';
 
-/** A cached value plus how long ago it was written (seconds). */
-export type CacheEntry<T> = { value: T; ageSeconds: number };
+/** A cached value, how long ago it was written (seconds), and the raw
+ *  `x-cached-at` wall-clock stamp it was derived from (null for an entry
+ *  written before this header existed).
+ *
+ *  `ageSeconds` is floored from a `Date.now()` sample taken at READ time, so two
+ *  entries read one Cache API round trip apart carry ages sampled at two
+ *  different instants — comparing them can invert the true write order when the
+ *  floors straddle a second boundary. `stampedAt` is the write-time instant
+ *  itself, so an ordering test between two entries is exact. */
+export type CacheEntry<T> = { value: T; ageSeconds: number; stampedAt: number | null };
 
 export type WorkerCache = CacheStore & {
   /** Like get(), but also reports the entry's age so callers can judge staleness. */
@@ -53,11 +61,10 @@ export function makeWorkerCache(req: Request, ttlSecondsDefault = 1800): WorkerC
         return null;
       }
       const stamped = Number(res.headers.get('x-cached-at'));
+      const stampedAt = Number.isFinite(stamped) && stamped > 0 ? stamped : null;
       const ageSeconds =
-        Number.isFinite(stamped) && stamped > 0
-          ? Math.max(0, Math.floor((Date.now() - stamped) / 1000))
-          : 0;
-      return { value, ageSeconds };
+        stampedAt === null ? 0 : Math.max(0, Math.floor((Date.now() - stampedAt) / 1000));
+      return { value, ageSeconds, stampedAt };
     },
 
     async put<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {

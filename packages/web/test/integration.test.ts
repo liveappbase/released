@@ -36,7 +36,7 @@ const INTERNAL_SECRET = 'test-shared-secret';
 // typed `unknown`, not LookupResult (a full LookupResult isn't required to exercise
 // the route, and the seeded fixtures below don't populate one).
 async function seedFederatedResult(sha: string, result: unknown) {
-  const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
+  const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`, 'cull', 'nopre');
   cacheStore.set(
     `https://released.example/__cache__/${encodeURIComponent(key)}`,
     new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } }),
@@ -600,9 +600,10 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
       releaseNotesHtml: null,
       rateLimit: null,
     };
-    // Seed the slot the route reads: cacheKey('res', `${host}/${projectPath}`,
-    // `issue:${number}`) — mirroring the commit endpoint's `sha:${sha}` key.
-    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue:11');
+    // Seed the slot the route reads. Since #143 that is the SAME key the public
+    // /i/ permalink writes: cacheKey('res', `${host}/${projectPath}`,
+    // `issue#${number}`, 'cull', 'nopre') — see routes/internal.ts.
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue#11', 'cull', 'nopre');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
@@ -631,7 +632,7 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
       releaseNotesHtml: null,
       rateLimit: null,
     };
-    const key = await cacheKey('res', 'github.com/honojs/hono', 'pr:17');
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'pr#17', 'cull', 'nopre');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
@@ -664,7 +665,7 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
       rateLimit: null,
     };
     // Proves the route keys the cache by host on the (Hono-decoded) projectPath.
-    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/glib', 'issue:1234');
+    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/glib', 'issue#1234', 'cull', 'nopre');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
@@ -705,7 +706,7 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
       rateLimit: null,
     };
     // Seed the slot the FIXED route keys on (Hono already decoded bad%25 → bad%).
-    const key = await cacheKey('res', 'gitlab.gnome.org/bad%', 'issue:1');
+    const key = await cacheKey('res', 'gitlab.gnome.org/bad%', 'issue#1', 'cull', 'nopre');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
@@ -721,7 +722,7 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
 
   it('GET /internal/issue/... fails CLOSED when INTERNAL_SECRET is unset (no web-og fallback)', async () => {
     cacheStore.clear();
-    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue:11');
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue#11', 'cull', 'nopre');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(
