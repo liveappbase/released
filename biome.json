@@ -52,6 +52,10 @@
           }
         }
       }
+    },
+    {
+      "includes": [".claude/settings.json"],
+      "formatter": { "enabled": false }
     }
   ]
 }
