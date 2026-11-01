@@ -128,34 +128,81 @@ describe('makeWorkerCache', () => {
     const entry = await cache.getEntry('k');
     expect(entry?.ageSeconds).toBe(0);
   });
-  // #164: a lookup computed with the caller's own PAT may be a private repo's
-  // answer. It must never land in (or be served from) the anonymous shared slot
-  // that public permalinks, badges and OG cards read.
+  // #164 (owner's choice on PR #173): a lookup made with the caller's own PAT may
+  // be a private repo's answer. It is cached in a namespace derived from a hash of
+  // that token, so the same caller keeps caching while anonymous callers and other
+  // tokens never read it.
+  function installMapCache() {
+    const store = new Map<string, Response>();
+    const fake = {
+      put: vi.fn(async (r: Request, res: Response) => {
+        store.set(r.url, res);
+      }),
+      match: vi.fn(async (r: Request) => store.get(r.url)?.clone()),
+    };
+    (globalThis as unknown as { caches: { default: typeof fake } }).caches = { default: fake };
+    return { store, fake };
+  }
+  const origin = 'https://released-web.lukaso.workers.dev';
+  const reqWith = (headers: Record<string, string> = {}) =>
+    new Request(`${origin}/api/lookup`, { headers });
+
   it.each(['x-user-github-token', 'x-user-gitlab-token'])(
-    'a request carrying %s gets a non-shared cache that never touches the store',
+    'a request carrying %s reads and writes its own namespace, not the anonymous slot',
     async (header) => {
-      const fake = installFakeCache();
-      const req = new Request('https://released-web.lukaso.workers.dev/api/lookup', {
-        headers: { [header]: 'ghp_private' },
+      const { fake } = installMapCache();
+      const token = 'ghp_private_token_value';
+      await makeWorkerCache(reqWith({ [header]: token })).put('k', { secret: true }, 1800);
+
+      const [putReq] = fake.put.mock.calls[0] as [Request, Response];
+      expect(putReq.url).not.toContain(token);
+      expect(putReq.url).not.toBe(`${origin}/__cache__/k`);
+
+      // Same token, a later request: it reads its own entry back.
+      expect(await makeWorkerCache(reqWith({ [header]: token })).get('k')).toEqual({
+        secret: true,
       });
-      const cache = makeWorkerCache(req);
-      await cache.put('k', { secret: true }, 1800);
-      expect(await cache.get('k')).toBeNull();
-      expect(await cache.getEntry('k')).toBeNull();
-      expect(cache.shared).toBe(false);
-      expect(fake.put).not.toHaveBeenCalled();
-      expect(fake.match).not.toHaveBeenCalled();
+      expect(
+        (await makeWorkerCache(reqWith({ [header]: ` ${token} ` })).getEntry('k'))?.value,
+      ).toEqual({ secret: true });
+      // Anonymous and another token never see it.
+      expect(await makeWorkerCache(reqWith()).get('k')).toBeNull();
+      expect(await makeWorkerCache(reqWith({ [header]: 'ghp_someone_else' })).get('k')).toBeNull();
     },
   );
 
-  it('a blank user-token header is not a token: the cache stays shared', async () => {
-    const fake = installFakeCache();
-    const req = new Request('https://released-web.lukaso.workers.dev/api/lookup', {
-      headers: { 'x-user-github-token': '   ' },
-    });
-    const cache = makeWorkerCache(req);
+  it('a token request never reads the anonymous entry for the same key', async () => {
+    installMapCache();
+    await makeWorkerCache(reqWith()).put('k', { public: true }, 1800);
+    expect(await makeWorkerCache(reqWith({ 'x-user-github-token': 'ghp_a' })).get('k')).toBeNull();
+    expect(await makeWorkerCache(reqWith()).get('k')).toEqual({ public: true });
+  });
+
+  it('a GitHub token and a GitLab token with the same value get different namespaces', async () => {
+    installMapCache();
+    await makeWorkerCache(reqWith({ 'x-user-github-token': 'same' })).put('k', { gh: 1 }, 1800);
+    expect(await makeWorkerCache(reqWith({ 'x-user-gitlab-token': 'same' })).get('k')).toBeNull();
+  });
+
+  it('flightKey: anonymous is the key itself; each token gets its own stable flight key', async () => {
+    installMapCache();
+    const anon = await makeWorkerCache(reqWith()).flightKey('k');
+    const a1 = await makeWorkerCache(reqWith({ 'x-user-github-token': 'ghp_a' })).flightKey('k');
+    const a2 = await makeWorkerCache(reqWith({ 'x-user-github-token': 'ghp_a' })).flightKey('k');
+    const b = await makeWorkerCache(reqWith({ 'x-user-github-token': 'ghp_b' })).flightKey('k');
+    expect(anon).toBe('k');
+    expect(a1).toBe(a2);
+    expect(a1).not.toBe(anon);
+    expect(b).not.toBe(a1);
+    expect(a1).not.toContain('ghp_a');
+  });
+
+  it('a blank user-token header is not a token: it uses the anonymous slot', async () => {
+    const { fake } = installMapCache();
+    const cache = makeWorkerCache(reqWith({ 'x-user-github-token': '   ' }));
     await cache.put('k', { x: 1 }, 1800);
-    expect(cache.shared).toBe(true);
-    expect(fake.put).toHaveBeenCalledOnce();
+    const [putReq] = fake.put.mock.calls[0] as [Request, Response];
+    expect(putReq.url).toBe(`${origin}/__cache__/k`);
+    expect(await cache.flightKey('k')).toBe('k');
   });
 });

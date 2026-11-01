@@ -428,6 +428,46 @@ describe('web Worker — basic routing', () => {
     }
   });
 
+  // #164 (owner's choice on PR #173): a PAT caller keeps a cache of its own. Seed
+  // that caller's slot through the real cache module, then check only that same
+  // token is served from it.
+  it("POST /api/lookup with a user PAT is served from that token's own cache slot", async () => {
+    const { makeWorkerCache } = await import('../src/cache.js');
+    const sha = 'c164c164c164c164c164c164c164c164c164c164';
+    const key = await cacheKey('res', 'github.com/acme/private', `sha:${sha}`, 'cull', 'nopre');
+    const pat = { 'x-user-github-token': 'ghp_private' };
+    await makeWorkerCache(new Request('https://released.example/api/lookup', { headers: pat })).put(
+      key,
+      { subject: 'seeded-pat-slot' },
+      1800,
+    );
+    const post = (headers: Record<string, string>) =>
+      app.fetch(
+        new Request('https://released.example/api/lookup', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify({ input: `https://github.com/acme/private/commit/${sha}` }),
+        }),
+      );
+    const originalFetch = globalThis.fetch;
+    const upstream = vi.fn(async () => {
+      throw new TypeError('network down in test');
+    });
+    globalThis.fetch = upstream as unknown as typeof fetch;
+    try {
+      const same = await post(pat);
+      expect(await same.text()).toContain('seeded-pat-slot');
+      expect(upstream).not.toHaveBeenCalled();
+
+      const other = await post({ 'x-user-github-token': 'ghp_someone_else' });
+      expect(await other.text()).not.toContain('seeded-pat-slot');
+      const anon = await post({});
+      expect(await anon.text()).not.toContain('seeded-pat-slot');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   // #164: the single-flight is keyed on the same slot key, so an anonymous request
   // concurrent with a PAT request must not join the PAT flight and get its answer.
   // Upstream answers differently per caller: the PAT call waits on a gate then gets
@@ -461,27 +501,41 @@ describe('web Worker — basic routing', () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
+    // Resolves once the PAT request is inside its flight (at the gated upstream
+    // call), so the anonymous request below always arrives while that flight is open.
+    let patArrived!: () => void;
+    const patInFlight = new Promise<void>((r) => {
+      patArrived = r;
+    });
     const originalFetch = globalThis.fetch;
     const anonCalls = vi.fn();
     globalThis.fetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
       const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
       if ((headers.get('authorization') ?? '').includes('ghp_private')) {
+        patArrived();
         await gate;
         return new Response('{"message":"Not Found"}', {
           status: 404,
           headers: { 'content-type': 'application/json' },
         });
       }
-      anonCalls();
+      // An unauthenticated call for this test's repo is the anonymous request's own compute.
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes('acme/flight') || url.includes('acme%2Fflight')) {
+        anonCalls(url);
+        release(); // the anonymous request computes on its own: let the PAT one finish
+      }
       throw new TypeError('network down in test');
     }) as typeof fetch;
     try {
       const patP = send({ 'x-user-github-token': 'ghp_private' });
-      await new Promise((r) => setTimeout(r, 0));
+      await patInFlight;
       const anonP = send({});
-      await new Promise((r) => setTimeout(r, 0));
-      release();
+      // If the anonymous request joined the PAT flight it never fetches; open the
+      // gate after a while so the test ends (and fails on anonCalls).
+      const fallback = setTimeout(release, 200);
       const [pat, anon] = await Promise.all([patP, anonP]);
+      clearTimeout(fallback);
       const patBody = await pat.text();
       const anonBody = await anon.text();
       expect(anonCalls).toHaveBeenCalled();

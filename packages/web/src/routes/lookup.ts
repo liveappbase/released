@@ -105,8 +105,8 @@ export async function lookupRoute(c: Context): Promise<Response> {
       await cache.put(k, r, ttl);
       return r;
     };
-    // A user-token lookup must not share a flight with an anonymous one (#164).
-    const result = cache.shared ? await singleFlight(k, compute) : await compute();
+    // A user-token lookup gets its own flight namespace (#164).
+    const result = await singleFlight(await cache.flightKey(k), compute);
     setTrack(req, {
       outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
     });

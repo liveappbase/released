@@ -39,7 +39,9 @@ function mkResult(opts: { released: boolean; partial?: boolean }): LookupResult 
 function makeFakeCache() {
   const store = new Map<string, { value: unknown; ageSeconds: number }>();
   const cache: WorkerCache = {
-    shared: true,
+    async flightKey(key: string) {
+      return key;
+    },
     async get<T>(key: string) {
       return (store.get(key)?.value as T) ?? null;
     },
@@ -256,7 +258,7 @@ describe('resolveLookup — real answers pass through', () => {
   });
 });
 
-describe('resolveLookup — a non-shared (user-PAT) cache never coalesces (#164)', () => {
+describe('resolveLookup — a user-PAT cache never coalesces with an anonymous one (#164)', () => {
   function deferred<T>() {
     let resolve!: (v: T) => void;
     const promise = new Promise<T>((r) => {
@@ -268,8 +270,8 @@ describe('resolveLookup — a non-shared (user-PAT) cache never coalesces (#164)
   it('an anonymous call concurrent with a PAT call on the same key computes its own answer', async () => {
     const shared = makeFakeCache();
     const pat = makeFakeCache();
-    const patCache: WorkerCache = { ...pat.cache, shared: false };
-    const anonCache: WorkerCache = { ...shared.cache, shared: true };
+    const patCache: WorkerCache = { ...pat.cache, flightKey: async (k) => `u/abc/${k}` };
+    const anonCache: WorkerCache = shared.cache;
     const privateAnswer = mkResult({ released: true, partial: false });
     const publicAnswer = { ...mkResult({ released: false }), subject: 'public' } as LookupResult;
     const patGate = deferred<LookupResult>();
@@ -288,7 +290,7 @@ describe('resolveLookup — a non-shared (user-PAT) cache never coalesces (#164)
 
   it('control: two shared calls on the same key still share one load', async () => {
     const f = makeFakeCache();
-    const cache: WorkerCache = { ...f.cache, shared: true };
+    const cache: WorkerCache = f.cache;
     const gate = deferred<LookupResult>();
     const load = vi.fn(() => gate.promise);
     const a = resolveLookup({ cache, key: 'res:flight-164-ctl', load });

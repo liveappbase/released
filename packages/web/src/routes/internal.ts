@@ -61,8 +61,8 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
       await cache.put(k, r, 30 * 60);
       return r;
     };
-    // A user-token lookup must not share a flight with an anonymous one (#164).
-    result = cache.shared ? await singleFlight(k, compute) : await compute();
+    // A user-token lookup gets its own flight namespace (#164).
+    result = await singleFlight(await cache.flightKey(k), compute);
     return new Response(JSON.stringify(result), {
       headers: { 'content-type': 'application/json' },
     });
