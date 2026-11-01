@@ -4,8 +4,9 @@
 // GET /h/:host/r/:projectPath/c/:sha.png     — federated (any host, #8)
 //   → Fetch the result data from `web` via Service Binding (D23).
 //   → Render PNG via @cloudflare/workers-og (Satori + resvg-wasm).
-//   → Cache 24h. On data miss, render a neutral placeholder with short TTL
-//     (never a long-cached error).
+//   → Cache 24h, but only for a SETTLED answer (a released commit). A
+//     not-yet-released or partial result, and a data miss (neutral
+//     placeholder), get a short TTL so the card can still flip (#151).
 
 import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
 import { type Context, Hono } from 'hono';
@@ -179,7 +180,80 @@ export default app;
 // of the og.* zone) recompress the PNG that `web` links as the byte-exact social
 // card. Everything after it is the actual freshness policy.
 export const LONG_CACHE = `public, no-transform, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
+
+/** A card we could NOT render from a result: the placeholder. Either `/internal`
+ *  missed/failed (transient — retry soon), or the URL carries a template version
+ *  this build cannot render (self-heals once web-og lands). Both want the
+ *  shortest honest retry window, so this stays at 60s. */
 export const SHORT_CACHE = 'public, no-transform, max-age=60';
+
+/** A card we DID render, from an answer that is still in motion: not-yet-released
+ *  or a soft-deadline `partial`. Distinct from SHORT_CACHE because the question is
+ *  different — not "how fast should a failure retry" but "how fast can this answer
+ *  actually change". It cannot change faster than the data behind it, and
+ *  `/internal` stores every computed result for 30 minutes
+ *  (`cache.put(k, r, 30 * 60)`, packages/web/src/routes/internal.ts). A 60s TTL
+ *  therefore bought no freshness the upstream has: it re-ran the ~700ms
+ *  satori+resvg wasm render up to 60x/hour per URL for byte-identical JSON. 300s
+ *  matches the TTL `badge.ts` already uses for the same pending state, and is
+ *  still 6x fresher than the upstream cache it reads through. */
+export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
+
+/** True only when the answer the card renders can never change again: a
+ *  completed traversal that found a release.
+ *
+ *  The lifetime used to key on whether a result came back AT ALL, which
+ *  long-cached two shapes that are still in motion (#151):
+ *
+ *  - a `partial` is a best-effort answer from a traversal the soft deadline
+ *    truncated, so its `firstRelease` is not confirmed to be the earliest one.
+ *    It has to stay revalidatable rather than be pinned as if it were final.
+ *    **This is the arm that changes production behaviour** (24h → 300s).
+ *  - `firstRelease: null` renders "not yet released", the one card whose whole
+ *    job is to flip once a release contains the commit. Two DIFFERENT shapes
+ *    render it, and only one of them is unreachable:
+ *
+ *      - BARE null (no `partial`): core does not emit it. `find-release.ts:316`
+ *        is its only `firstRelease: null` return and it always carries
+ *        `partial: soft_deadline`, and a genuine not-yet-released commit throws
+ *        `NotYetReleasedError` (`:326`, `:478` for the issue/PR aggregation),
+ *        which `/internal` turns into a 503
+ *        (`web/src/routes/internal.ts:67-72`) — so `fetchResult` sees
+ *        `!res.ok`, returns null, and web-og renders the neutral PLACEHOLDER at
+ *        `SHORT_CACHE`, never this card. The bare-null arm below is a defensive
+ *        guard on a shape the type permits and core keeps a fallback branch for
+ *        (`:486`), not a bug that shipped.
+ *      - null WITH `partial: soft_deadline`: REACHABLE, and it ships the "not
+ *        yet released" card today. `find-release.ts:312-322` returns it as a
+ *        normal value, `/internal` caches it and answers 200, so `ResultCard`
+ *        sets `tag = firstRelease?.tag ?? 'not yet released'`. That is the
+ *        blown-soft-deadline route into this card, not `NotYetReleasedError`.
+ *        PR #144 makes `/internal` 503 every `partial`, which closes this route
+ *        until #156 reopens it with a caveat on the card — but the shape is live
+ *        on `main` right now, so the lifetime rule has to be right for it either
+ *        way. It is: PENDING via the `partial` arm above. `routing.test.ts` has
+ *        a copy guard on it.
+ *
+ *  What that means for #151's headline case: the not-yet-released unfurl is
+ *  still wrong today, but wrong in a different way than "pinned for 24h" — it
+ *  is the neutral "Looking up…" placeholder rather than a card saying the
+ *  commit is unreleased. That is #150, and it is deliberately NOT fixed here:
+ *  it needs `/internal` to stop 503-ing `NotYetReleasedError`, which is a
+ *  change to the web package's error mapping, not to this lifetime rule.
+ *
+ *  This is STRICTER than the web side, deliberately. `hardTtlFor()`
+ *  (packages/web/src/resolve.ts) tests `firstRelease` first, so a partial
+ *  that carries a `firstRelease` gets the 30-day terminal TTL there, and
+ *  `badge.ts` long-caches the same shape for 24h. A truncated traversal that
+ *  reported v2.0.0 when v1.9.0 was the true earliest is therefore still
+ *  pinned on those two surfaces — the partial half of #151, tracked
+ *  separately in #159. Here it revalidates.
+ *
+ *  It is the OG analogue of the badge invariant the project already states:
+ *  released → long cache, not-yet/checking → short cache. */
+function isTerminal(result: LookupResult): boolean {
+  return result.firstRelease != null && !result.partial;
+}
 
 export function renderImage(
   result: LookupResult | null,
@@ -187,7 +261,9 @@ export function renderImage(
   cacheOverride?: string,
 ): Response {
   const SIZE = { width: 1200, height: 630 };
-  const cacheControl = cacheOverride ?? (result ? LONG_CACHE : SHORT_CACHE);
+  const cacheControl =
+    cacheOverride ??
+    (result == null ? SHORT_CACHE : isTerminal(result) ? LONG_CACHE : PENDING_CACHE);
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 
