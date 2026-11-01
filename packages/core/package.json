@@ -27,7 +27,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "micromark": "^4.0.1"
+    "micromark": "^4.0.3"
   },
   "engines": {
     "node": ">=20"
