@@ -9,10 +9,9 @@
 // plugin (replacing the old defineWorkersProject + poolOptions.workers). See the
 // package's vitest-v3-to-v4 codemod.
 //
-// Node 22+ only. Importing @cloudflare/vitest-pool-workers pulls in miniflare,
-// which requires undici 8.x; undici 8.x builds a CacheStorage at module load
-// whose constructor calls node:worker_threads.markAsUncloneable — an API added
-// in Node 22. On Node 20 that import crashes outright with
+// Node 22+ only. Importing @cloudflare/vitest-pool-workers pulls in miniflare
+// (and wrangler), whose package.json declares engines node >=22.0.0. Older
+// miniflare/undici combinations crashed outright on Node 20 with
 // "TypeError: webidl.util.markAsUncloneable is not a function". The product
 // itself still supports Node 20+ (the plain-Node suite in vitest.config.ts runs
 // on the full CI matrix); only this workerd render pool needs Node 22. So the
