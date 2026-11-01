@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@cloudflare/workers-types": "^5.20260708.1",
+    "@cloudflare/workers-types": "^5.20261009.1",
     "@types/jsdom": "^28.0.3",
     "axe-core": "^4.12.1",
     "jsdom": "^29.1.1",
