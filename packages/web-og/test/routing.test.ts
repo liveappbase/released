@@ -2,6 +2,7 @@
 // PNG rendering depends on WASM and the Workers runtime, which we verify with
 // `wrangler dev` rather than in vitest.
 
+import { OG_TEMPLATE_VERSION } from '@released/core';
 import { describe, expect, it, vi } from 'vitest';
 
 // The last satori node tree handed to ImageResponse. The real PNG render is
@@ -17,7 +18,20 @@ vi.mock('workers-og', () => ({
   ImageResponse: class extends Response {
     constructor(node: unknown, init?: { headers?: Record<string, string> }) {
       lastRenderedNode = node;
-      super('PNG-BYTES', { headers: init?.headers ?? {} });
+      // Mirror workers-og's real header construction, including its own
+      // capitalized 'Cache-Control' default and the case-SENSITIVE spread of
+      // the caller's `headers` after it. The old mock passed `init.headers`
+      // straight through, which made every cache-control assertion below
+      // unfalsifiable: prod merged the library's 1-year immutable default in
+      // front of ours, while these tests read back exactly what the caller
+      // passed and stayed green.
+      super('PNG-BYTES', {
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, immutable, no-transform, max-age=31536000',
+          ...(init?.headers ?? {}),
+        },
+      });
     }
   },
 }));
@@ -148,7 +162,9 @@ describe('web-og routing', () => {
     // The service binding was called.
     expect(env.WEB.fetch).toHaveBeenCalled();
     // The cache-control should be the LONG one because we got a real result.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('returns a placeholder PNG with SHORT cache when the service binding misses', async () => {
@@ -158,7 +174,7 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // Federated OG (issue #8): the /h/:host/r/:projectPath path renders unfurls for
@@ -191,7 +207,9 @@ describe('web-og routing', () => {
     const calledUrl = String(calls[0]?.[0]);
     expect(calledUrl).toBe('https://web/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/a1b2c3d');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('federated: rejects a non-.png URL with 404', async () => {
@@ -209,7 +227,135 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+  });
+
+  // The deploy-window version gate is NOT specific to /placeholder.png: `web`
+  // links EVERY card as `<url>.png?v=${OG_TEMPLATE_VERSION}` (og-meta.tsx), and
+  // release.yml deploys `web` before `web-og`, so during the window this build
+  // is asked for `?v=og.vNEXT` on the dynamic routes too — the ones whose
+  // content actually differs per commit/issue/PR. Long-caching a version-busted
+  // URL rendered from the OLD template pins a stale card for 24h with no second
+  // URL left to bust, so a version this build cannot render forces SHORT_CACHE.
+  const VERSIONED_CARD_ROUTES = [
+    ['github commit', '/r/facebook/react/c/a1b2c3d.png'],
+    ['federated commit', '/h/gitlab.gnome.org/r/GNOME%2Fgimp/c/a1b2c3d.png'],
+    ['github issue', '/i/facebook/react/11.png'],
+    ['github PR', '/p/facebook/react/4834.png'],
+    ['federated issue', '/h/gitlab.com/i/gitlab-org%2Fgitlab-runner/39607.png'],
+    ['federated PR', '/h/gitlab.com/p/gitlab-org%2Fgitlab-runner/6867.png'],
+  ] as const;
+
+  // A real (non-null) result, so the route takes the LONG cache branch — the
+  // only branch the version gate can change.
+  function realResultEnv(): ReturnType<typeof makeEnv> {
+    const sha40 = 'a'.repeat(40);
+    return makeEnv(
+      new Response(
+        JSON.stringify({
+          input: { kind: 'commit', repo: { owner: 'facebook', repo: 'react' }, sha: sha40 },
+          canonicalSha: sha40,
+          firstRelease: { tag: 'v1.0.0', sha: 's', date: '2024-01-01T00:00:00Z', url: '' },
+          alsoIn: [],
+          releaseNotesHtml: null,
+          rateLimit: null,
+        }),
+      ),
+    );
+  }
+
+  for (const [label, path] of VERSIONED_CARD_ROUTES) {
+    it(`${label}: a version this build cannot render falls back to the SHORT cache`, async () => {
+      const res = await app.fetch(
+        new Request(`https://og.example${path}?v=og.vNEXT`),
+        realResultEnv(),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+    });
+
+    it(`${label}: the CURRENT template version still gets the LONG cache`, async () => {
+      const res = await app.fetch(
+        new Request(`https://og.example${path}?v=${OG_TEMPLATE_VERSION}`),
+        realResultEnv(),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe(
+        'public, no-transform, max-age=86400, s-maxage=86400',
+      );
+    });
+  }
+
+  // No `v` at all is not a URL `web` emits, but it is also not evidence of a
+  // template mismatch (a hand-typed or pre-#55 crawler URL) — it keeps the
+  // result-based default rather than being punished into the short cache.
+  it('dynamic card: an unversioned request keeps the LONG cache for a real result', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      realResultEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
+  });
+
+  // `Headers.set` replaces workers-og's whole default value, which silently
+  // dropped the `no-transform` that shipped on every OG response before the
+  // override fix. These PNGs are the byte-exact social card `web` links; a
+  // transforming edge (Polish/Mirage or any proxy) must not recompress them.
+  it('cache-control keeps no-transform on both the long and the short cache', async () => {
+    const long = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      realResultEnv(),
+    );
+    const short = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    expect(long.headers.get('cache-control')).toContain('no-transform');
+    expect(short.headers.get('cache-control')).toContain('no-transform');
+  });
+
+  // The static /placeholder.png is the ONE null-result render that is NOT
+  // transient: it is byte-identical on every request (no owner/repo/sha), and
+  // `web` only ever links it with `?v=${OG_TEMPLATE_VERSION}`
+  // (packages/web/src/ui/og-meta.tsx), so a template change busts the URL
+  // rather than needing the TTL to expire. Short-caching it would re-run a
+  // ~700ms satori+resvg wasm render every 60s for an image that can never
+  // differ. It opts into the long cache explicitly — the null-result default
+  // stays SHORT for the genuinely transient callers (binding miss, notFound).
+  it('/placeholder.png: the static route gets the LONG cache, not the null-result short cache', async () => {
+    const res = await app.fetch(
+      new Request(`https://og.example/placeholder.png?v=${OG_TEMPLATE_VERSION}`),
+      makeEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
+    expect(collectText(lastRenderedNode)).toContain('Looking up…');
+  });
+
+  // ...but only for a version THIS build can render. `release.yml` deploys
+  // `web` BEFORE `web-og`, so on a template bump `web` is already emitting
+  // `?v=og.vNEXT` while this Worker is still the OLD build. Long-caching that
+  // URL would pin a stale-template card for 24h at every scraper that unfurled
+  // during the deploy window — and the busting URL is already spent, so there
+  // is no second URL to bump. An unrenderable version falls back to the SHORT
+  // cache and self-heals 60s after web-og lands.
+  it('/placeholder.png: a version this build cannot render falls back to the SHORT cache', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/placeholder.png?v=og.vNEXT'),
+      makeEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+  });
+
+  // An unversioned hit is not a URL `web` ever emits (og-meta.tsx always
+  // appends `?v=`), so it gets no long-cache guarantee either.
+  it('/placeholder.png: an unversioned request gets the SHORT cache', async () => {
+    const res = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
@@ -219,7 +365,7 @@ describe('web-og routing', () => {
   it('notFound: an unmatched .png renders a short-cached placeholder PNG, not 404', async () => {
     const res = await app.fetch(new Request('https://og.example/totally/unknown.png'), makeEnv());
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -289,8 +435,12 @@ describe('web-og card content', () => {
     // The SHIPPED badge and the date are gated on `firstRelease` — both gone.
     expect(text).not.toContain('SHIPPED');
     expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
-    // A long-cache header still applies — we DID get a result, it's just unreleased.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    // Pending-cached: "not yet released" is a pending state that has to flip
+    // when the release lands, so it is NOT long-cacheable just because a
+    // result came back (#151). Lifetime coverage lives in its own describe.
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=300, s-maxage=300',
+    );
   });
 
   it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
@@ -377,7 +527,9 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(text).toContain('v0.0.11');
     expect(text).toContain('honojs/hono');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('pr route: calls /internal/pr/:owner/:repo/:number and renders "PR #N" + title', async () => {
@@ -432,7 +584,7 @@ describe('web-og issue/PR cards (#79)', () => {
     const env = makeEnv(new Response('not found', { status: 404 }));
     const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
     expect(text.join(' ')).toContain('honojs/hono #11');
@@ -521,7 +673,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -537,7 +689,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // A verbose issue/PR title (GitHub allows 256 chars) must not overflow the
@@ -593,5 +745,151 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(joined).toContain('…');
     // No lone surrogate (U+D800–U+DFFF) leaks into the rendered text.
     expect(/[\u{D800}-\u{DFFF}]/u.test(joined)).toBe(false);
+  });
+});
+
+// #151: the cache lifetime keys on whether a result was RECEIVED, not on
+// whether the answer it renders can still change. Both non-terminal shapes —
+// "not yet released" (firstRelease null) and a soft-deadline `partial` — are
+// real LookupResults, so both took the 24h cache. The not-yet card is the one
+// card whose whole job is to flip when the release lands; a partial is an
+// unconfirmed answer from a truncated traversal. Pinning either for a day in
+// every crawler's cache is the OG analogue of the badge invariant the project
+// already states (released → long, not-yet/checking → short).
+describe('web-og cache lifetime keys on terminality, not presence (#151)', () => {
+  const LONG = 'public, no-transform, max-age=86400, s-maxage=86400';
+  // A pending answer is backed by `/internal`'s own 30-minute result cache
+  // (`cache.put(k, r, 30 * 60)` in packages/web/src/routes/internal.ts), so a
+  // 60s edge TTL cannot buy freshness the upstream does not have — it just
+  // re-runs the ~700ms satori+resvg render up to 60x/hour per URL while
+  // `/internal` hands back byte-identical JSON. 300s matches what badge.ts
+  // already uses for the same pending state and is still 6x fresher than the
+  // data behind it.
+  const PENDING = 'public, no-transform, max-age=300, s-maxage=300';
+  // PENDING stays separate from the placeholder's 60s SHORT_CACHE because the
+  // two answer different questions: SHORT_CACHE is "how fast should a FAILED
+  // render retry" (binding miss, unrenderable template version), PENDING is
+  // "how fast can this ANSWER change". Collapsing them by bumping SHORT_CACHE
+  // to 300 reddens the 14 existing placeholder-lifetime tests above, which is
+  // the guard for that direction.
+
+  const baseInput = {
+    kind: 'commit',
+    repo: { owner: 'facebook', repo: 'react', projectPath: 'facebook/react' },
+    sha: 'a'.repeat(40),
+  };
+  const released = { tag: 'v18.2.0', sha: 's', date: '2024-03-15T09:00:00Z', url: '' };
+
+  async function fetchCard(result: Record<string, unknown>): Promise<Response> {
+    return await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      makeEnv(new Response(JSON.stringify(result))),
+    );
+  }
+
+  // Scope this one honestly, and only to the BARE shape. `firstRelease: null`
+  // with NO `partial` is what core does not currently emit: `find-release.ts:316`
+  // is its only null return and always carries `partial: soft_deadline`, and a
+  // genuine not-yet-released commit throws `NotYetReleasedError`, which
+  // `/internal` turns into a 503. So this is a DEFENSIVE unit guard on the
+  // lifetime rule for a shape the type permits (and core keeps a fallback branch
+  // for at `:486`) — it is not evidence about a state production reaches today.
+  // It says nothing about `null` WITH a `partial`, which IS reachable and has its
+  // own copy guard below. (The same distinction is already drawn on
+  // `pendingFixture` in web's internal-cache-origin tests.)
+  it('DEFENSIVE: a bare not-yet-released result is PENDING-cached (300s), not pinned', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    // The card really does render the flippable copy — so this is the card
+    // whose lifetime matters, not an unrelated shape.
+    expect(collectText(lastRenderedNode)).toContain('not yet released');
+    expect(res.headers.get('cache-control')).toBe(PENDING);
+  });
+
+  // The REACHABLE not-yet-released path, end to end, and the one #151 actually
+  // asked to be pinned down: `/internal` 503s `NotYetReleasedError`, `fetchResult`
+  // returns null, and web-og renders the neutral placeholder at SHORT_CACHE. This
+  // documents what production does today — including that the card does NOT say
+  // the commit is unreleased, which is #150 and out of scope here. If #150 is
+  // fixed by making `/internal` return a result instead of a 503, this test goes
+  // red and points at the lifetime decision that has to be made with it.
+  it('a not-yet-released commit reaches web-og as a 503 → placeholder, short-cached (#150)', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      makeEnv(new Response('{"error":"not yet released"}', { status: 503 })),
+    );
+    expect(res.status).toBe(200);
+    // Not the "not yet released" card — the neutral placeholder.
+    expect(collectText(lastRenderedNode)).toContain('Looking up…');
+    expect(collectText(lastRenderedNode)).not.toContain('not yet released');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+  });
+
+  // The REACHABLE route into the "not yet released" card, and the one the
+  // docstring on `isTerminal` used to disclaim. A blown soft deadline with no
+  // gallop hit returns `firstRelease: null` + `partial` as a normal VALUE
+  // (`find-release.ts:312-322`); `/internal` caches it and answers 200, so
+  // `fetchResult` hands web-og a real result and `ResultCard` renders
+  // `firstRelease?.tag ?? 'not yet released'`. Asserting the COPY as well as the
+  // lifetime is the point: the shape reaches this card on `main` today, and #144
+  // (503 on every partial) then #156 (render it with a caveat) both move that
+  // route without changing what the lifetime must be. If either lands without
+  // deciding this card's lifetime deliberately, this test is what says so.
+  it('a soft-deadline partial with NO release renders the not-yet copy, PENDING-cached', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      partial: { reason: 'soft_deadline', candidatesTried: 12 },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    expect(collectText(lastRenderedNode)).toContain('not yet released');
+    // Not LONG: an unconfirmed traversal must stay revalidatable. Not the
+    // placeholder's SHORT_CACHE either — this is a rendered answer, not a failed
+    // render.
+    expect(res.headers.get('cache-control')).toBe(PENDING);
+  });
+
+  it('partial result is PENDING-cached even though it carries a firstRelease', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: released,
+      partial: { reason: 'soft_deadline', candidatesTried: 12 },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    // A galloped answer under a blown soft deadline is not confirmed earliest,
+    // so it must stay revalidatable rather than pinned for a day.
+    expect(res.headers.get('cache-control')).toBe(PENDING);
+  });
+
+  // Complement. Without it, "short-cache everything" passes the two above and
+  // silently re-renders every settled card once a minute. (Proven: forcing
+  // isTerminal to false reddens this and 10 pre-existing long-cache tests.)
+  it('terminal released result keeps the LONG cache', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: released,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    expect(collectText(lastRenderedNode)).toContain('SHIPPED');
+    expect(res.headers.get('cache-control')).toBe(LONG);
   });
 });

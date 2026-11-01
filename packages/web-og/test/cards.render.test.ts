@@ -125,3 +125,33 @@ it('placeholder card (null result): renders a real non-empty PNG', async () => {
   const res = renderImage(null, { owner: 'facebook', repo: 'react', sha: 'abc1234' });
   await expectValidCardPng(res, 'placeholder');
 });
+
+// Cache semantics against the REAL workers-og (the routing tests mock it, so
+// they cannot see this). workers-og builds its response headers as
+//   { 'Content-Type': …, 'Cache-Control': <its own 1-year default>, ...opts.headers }
+// and object spread is case-SENSITIVE: a lowercase 'cache-control' from the
+// caller does not replace the capitalized default, so BOTH keys reach
+// `new Response`, where Headers merges them into one comma-joined value
+// ("public, immutable, no-transform, max-age=31536000, public, max-age=60").
+// Caches read the first max-age, so the short-cached cards — placeholder,
+// cold-lookup, the deploy-window notFound render — were pinned immutable for a
+// year instead of 60s and could never refresh. Assert the header EXACTLY: a
+// substring match passes on the merged value and would not have caught this.
+it('placeholder card: cache-control is EXACTLY the short cache (no 1-year default merged in)', () => {
+  const res = renderImage(null, { owner: 'facebook', repo: 'react', sha: 'abc1234' });
+  expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+});
+
+it('result card: cache-control is EXACTLY the long cache (no 1-year default merged in)', () => {
+  const res = renderImage(
+    result({
+      input: { kind: 'commit', repo: repo('github.com', 'facebook/react'), sha: 'a'.repeat(40) },
+      canonicalSha: 'a'.repeat(40),
+      firstRelease: { tag: 'v18.2.0', sha: 's', date: '2024-01-01T00:00:00Z', url: '' },
+    }),
+    { owner: 'facebook', repo: 'react', sha: 'abc1234' },
+  );
+  expect(res.headers.get('cache-control')).toBe(
+    'public, no-transform, max-age=86400, s-maxage=86400',
+  );
+});

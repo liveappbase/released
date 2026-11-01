@@ -23,11 +23,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "micromark": "^4.0.1"
+    "micromark": "^4.0.3"
   },
   "engines": {
     "node": ">=20"
