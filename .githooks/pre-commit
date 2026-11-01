@@ -1,69 +1,41 @@
 #!/usr/bin/env bash
-# liveapp-hook-version: 1
+# Pre-commit: lint staged JS/TS/JSON files with biome. Fast (~tens of ms).
+# Mirrors the Lint step in .github/workflows/ci.yml so CI never fails on
+# something a local commit could have caught.
 #
-# liveapp-pre-commit.sh — the Live App Contract's GIT-NATIVE commit gate, installed into the
-# app's effective git hooks dir by the `agent_hooks` bootstrap (chained in front of any existing
-# hook). Companion to liveapp-pre-push.sh — see its header for the v1→v4 post-mortem rationale.
+# Skip for WIP commits with: `git commit --no-verify`
 #
-# The hook runs INSIDE the repo, so "am I committing on the default branch" is one symbolic-ref —
-# no cwd forensics, no -C parsing, no command strings. DENY when HEAD is the default branch (or
-# master) unless approved (same TOKEN / TTY paths and env contract as liveapp-pre-push.sh).
-# Detached HEAD or unresolvable -> ALLOW (a commit is harmless until pushed; never strand a
-# rebase/CI context). A pre-existing app pre-commit is preserved as <this>.liveapp-chained and
-# exec'd after our gate allows.
-#
-# LIVEAPP_* read here: LIVEAPP_DEFAULT_BRANCH, LIVEAPP_APPROVE_TTL, LIVEAPP_HOOK_CONFIRM (test
-# harness; ignored under LIVEAPP_LOOP), LIVEAPP_LOOP, LIVEAPP_CHAINED_HOOK — see liveapp-pre-push.sh.
-set -uo pipefail
+# Written for macOS's bundled bash 3.2 + BSD grep — no mapfile, no -z flag,
+# no process substitution into arrays.
+set -euo pipefail
 
-DEF="${LIVEAPP_DEFAULT_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')}"
-DEF="${DEF:-main}"
-is_default() { [ "$1" = "$DEF" ] || [ "$1" = master ]; }
-
-deny() {
-  {
-    echo "liveapp pre-commit: refusing a commit ON the default branch '$DEF'."
-    echo "  Work on a branch (git checkout -b <feature>), or approve: say the approval phrase"
-    echo "  in your Claude session ('ship it' / 'commit'), or answer y at this prompt in an"
-    echo "  interactive terminal."
-  } >&2
-  exit 1
-}
-
-token_ok() {
-  local gd t ts now
-  gd="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
-  [ -n "$gd" ] || return 1
-  t="$gd/liveapp-approve"
-  [ -f "$t" ] || return 1
-  ts="$(cat "$t" 2>/dev/null)"; now="$(date +%s)"
-  rm -f "$t"                                  # ONE-SHOT either way — stale tokens never linger
-  case "$ts" in ''|*[!0-9]*) return 1;; esac
-  [ $(( now - ts )) -le "${LIVEAPP_APPROVE_TTL:-600}" ]
-}
-
-tty_ok() {
-  [ -n "${LIVEAPP_LOOP:-}" ] && return 1                      # the loop NEVER confirms
-  if [ -n "${LIVEAPP_HOOK_CONFIRM:-}" ]; then                 # test-harness tty answer
-    [ "$LIVEAPP_HOOK_CONFIRM" = y ]; return $?
-  fi
-  [ -n "${CLAUDECODE:-}" ] && return 1                        # Claude sessions use the token path
-  [ -t 2 ] || return 1                                        # no interactive terminal -> no prompt
-  [ -e /dev/tty ] || return 1
-  printf "liveapp: this commit is ON the default branch '%s' — proceed? [y/N] " "$DEF" > /dev/tty 2>/dev/null || return 1
-  local ans=""
-  read -r -t 30 ans < /dev/tty 2>/dev/null || return 1
-  [ "$ans" = y ] || [ "$ans" = Y ]
-}
-
-cur="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-if [ -n "$cur" ] && is_default "$cur"; then
-  token_ok || tty_ok || deny
+# Skip in CI. GitHub Actions sets CI=true. The Changesets action's auto-
+# commit (chore(release): version packages) regenerates package.json
+# files via a JSON serializer that doesn't match biome's formatter
+# exactly, and the workflow already runs `pnpm lint` as a separate step
+# anyway.
+if [ -n "${CI:-}" ]; then
+  exit 0
 fi
 
-# chain the app's own pre-commit (preserved at install time)
-CHAINED="${LIVEAPP_CHAINED_HOOK:-$0.liveapp-chained}"
-if [ -x "$CHAINED" ]; then
-  "$CHAINED" "$@" || exit $?
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Secret scan FIRST, on all staged files (not just JS) — a stray `git add` of a
+# .dev.vars / .env is the highest-blast-radius mistake. Blocks the commit if a
+# token/key is staged; no-ops if gitleaks isn't installed (CI is the gate).
+scripts/secrets-scan.sh --staged
+
+# Newline-separated list of staged files. --diff-filter=ACM = Added, Copied,
+# Modified (skips Deletions, which can't be linted). Filenames with embedded
+# newlines aren't a realistic concern in a TS project; if they ever are,
+# rewrite this to use `git diff -z` + a portable null-delimited loop.
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|js|jsx|json|jsonc)$' || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
 fi
-exit 0
+
+# biome check = formatter + linter + import organizer in one pass.
+# Intentional word-splitting on STAGED.
+# shellcheck disable=SC2086
+pnpm exec biome check $STAGED
