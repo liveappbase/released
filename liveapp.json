@@ -5,6 +5,6 @@
   "state": {
     "key": "lukaso-released",
     "mode": "remote",
-    "remote": "https://github.com/lukaso/released-liveapp-state.git"
+    "remote": "https://github.com/liveappbase/released-liveapp-state.git"
   }
 }
