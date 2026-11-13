@@ -68,7 +68,7 @@ jobs:
       # attestation linking the package to this exact workflow run + commit.
       - name: Create release PR or publish CLI to npm
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           # `pnpm version` and `pnpm publish` are pnpm built-ins — they bypass
           # the package.json `scripts` block. Force the script lookup with `run`
