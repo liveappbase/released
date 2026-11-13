@@ -122,6 +122,30 @@ ANUBIS_HOSTS = ""
 # the preview never writes the prod released_events dataset. See isProdRequest()
 # in src/analytics.ts. The analytics binding below is isolated regardless.
 PROD_HOST = "released.blabberate.com"
+# Cache origin + canonical URLs for THIS deployment. Without it the /internal/*
+# endpoints web-og calls fall back to PROD_HOST above and key the result cache on
+# a host the preview Worker does not serve. Must stay the preview Worker's own
+# URL (name above + the account's workers.dev subdomain).
+#
+# NOTE: this does NOT make preview a place the #143 cache alignment can be
+# exercised. Cloudflare documents Cache API operations as functional only for
+# Workers on custom domains, so on a *.workers.dev preview neither the public
+# routes nor /internal ever warm a slot, and a second unfurl still pays a full
+# lookup however the origins line up. The alignment is proven by the unit tests
+# (test/internal-cache-origin.test.ts) and only takes effect on the prod custom
+# domain. The var is still correct to set: it keeps preview off the prod key
+# namespace and drives canonical URLs.
+#
+# COUPLING: this var has a SECOND effect. `publicBaseUrl()` (src/env.ts) prefers
+# it over the incoming request origin, so preview's canonical links, `og:url` and
+# every `pubBase`-derived href come from this literal rather than being correct by
+# construction. The `[env.preview] name` half of that is guarded: on a workers.dev
+# host the first label IS the Worker name, and `cacheOriginProblems`
+# (test/internal-cache-origin.test.ts) fails the build when the two drift, so a
+# rename cannot silently leave this line behind. The ACCOUNT subdomain half is not
+# guardable from this file — `.lukaso.workers.dev` appears nowhere else in it — so
+# deploying under a different account still needs this line updated by hand.
+PUBLIC_BASE_URL = "https://released-web-preview.lukaso.workers.dev"
 
 [env.preview.assets]
 directory = "./public"

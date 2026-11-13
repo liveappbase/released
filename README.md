@@ -136,6 +136,19 @@ pnpm --filter @released/web-og dev       # wrangler dev for web-og
 pnpm --filter git-released dev -- <input>    # tsx-run the CLI in place
 ```
 
+Working on OG rendering locally? Put this in `packages/web/.dev.vars`:
+
+```
+PUBLIC_BASE_URL=http://localhost:8787
+```
+
+`/internal/*` (what web-og calls) keys the result cache on the deployment's own
+public origin. `wrangler dev` loads `[vars]`, where `PROD_HOST` is set, so
+without the override the OG path keys on `https://released.blabberate.com` while
+your public routes key on `http://localhost:8787`: two namespaces on one
+machine, and every local OG request pays a full lookup instead of hitting the
+slot the permalink just warmed. Prod and the preview Worker set it themselves.
+
 ### Local checks reference
 
 | Command | What it does | Gate? |
