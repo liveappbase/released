@@ -14,6 +14,7 @@
 // ourselves from the age — see resolve.ts.
 
 import type { CacheStore } from '@released/core';
+import { userTokenScope } from './auth.js';
 
 /** A cached value plus how long ago it was written (seconds). */
 export type CacheEntry<T> = { value: T; ageSeconds: number };
@@ -21,18 +22,31 @@ export type CacheEntry<T> = { value: T; ageSeconds: number };
 export type WorkerCache = CacheStore & {
   /** Like get(), but also reports the entry's age so callers can judge staleness. */
   getEntry<T>(key: string): Promise<CacheEntry<T> | null>;
+  /** The single-flight key for `key`. A user-token request gets its own flight
+   *  namespace, so it never coalesces with an anonymous or another user's compute. */
+  flightKey(key: string): Promise<string>;
 };
 
+// A lookup made with the caller's own token may be a private repo's answer (#164).
+// It is cached under `__cache__/u/<sha256 of the token>/`, apart from the anonymous
+// slot that the public permalink, badge and OG routes read. Anonymous keys are
+// URI-encoded, so they never contain a `/` and cannot collide with that prefix.
 export function makeWorkerCache(req: Request, ttlSecondsDefault = 1800): WorkerCache {
   const origin = new URL(req.url).origin;
-  const keyUrl = (key: string) => `${origin}/__cache__/${encodeURIComponent(key)}`;
+  const scope = userTokenScope(req);
+  const keyUrl = async (key: string) =>
+    `${origin}/__cache__/${await scope}${encodeURIComponent(key)}`;
   const store = (caches as unknown as { default: Cache }).default;
 
-  function match(key: string): Promise<Response | undefined> {
-    return store.match(new Request(keyUrl(key)));
+  async function match(key: string): Promise<Response | undefined> {
+    return store.match(new Request(await keyUrl(key)));
   }
 
   return {
+    async flightKey(key: string): Promise<string> {
+      return `${await scope}${key}`;
+    },
+
     async get<T>(key: string): Promise<T | null> {
       const res = await match(key);
       if (!res) return null;
@@ -69,7 +83,7 @@ export function makeWorkerCache(req: Request, ttlSecondsDefault = 1800): WorkerC
           'x-cached-at': String(Date.now()),
         },
       });
-      await store.put(new Request(keyUrl(key)), res);
+      await store.put(new Request(await keyUrl(key)), res);
     },
   };
 }

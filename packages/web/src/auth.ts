@@ -16,6 +16,22 @@ export function resolveToken(env: Env | undefined, req: Request): string | undef
   return undefined;
 }
 
+/** Cache namespace for a request: '' when the caller brought no provider token,
+ *  else `u/<hex sha256>/` over both user-token headers. Such a lookup may be a
+ *  private repo's answer, so it must stay out of the anonymous shared result
+ *  cache (#164). Blank headers are ignored and values trimmed, as in the
+ *  resolvers. The header name is part of the digest, so a GitHub and a GitLab
+ *  token with the same value do not share a namespace. */
+export async function userTokenScope(req: Request): Promise<string> {
+  const gh = req.headers.get('x-user-github-token')?.trim() ?? '';
+  const gl = req.headers.get('x-user-gitlab-token')?.trim() ?? '';
+  if (!gh && !gl) return '';
+  const bytes = new TextEncoder().encode(`github:${gh}\ngitlab:${gl}`);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const hex = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `u/${hex}/`;
+}
+
 /** Resolve a provider API token for a given host. Honors per-host Worker secrets
  *  (GITLAB_TOKEN_<HOST>) so different self-hosted GitLab instances can use
  *  different PATs. */
