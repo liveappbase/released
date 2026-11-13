@@ -4,7 +4,7 @@
 #
 # Cloudflare Containers run linux/amd64; pin it so the image also builds on
 # Apple Silicon dev machines. CI runners are amd64, so no emulation there.
-FROM --platform=linux/amd64 node:20-slim
+FROM --platform=linux/amd64 node:22.23.4-slim
 
 WORKDIR /app
 # Just the relay sources — zero npm dependencies (uses Node's built-in fetch + http).
