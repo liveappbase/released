@@ -45,7 +45,7 @@
   },
   "devDependencies": {
     "@released/core": "workspace:*",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "tsup": "^8.3.5",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
