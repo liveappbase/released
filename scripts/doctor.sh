@@ -20,7 +20,7 @@ echo "To contribute (build · test · lint · push · open PRs):"
 if command -v node >/dev/null 2>&1; then
   ok "node $(node -v)"
 else
-  miss "node not found — install Node 20+ (https://nodejs.org)"
+  miss "node not found — install Node 22+ (https://nodejs.org)"
   FAIL=1
 fi
 if command -v pnpm >/dev/null 2>&1; then

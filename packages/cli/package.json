@@ -33,7 +33,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --target node20 --out-dir dist --clean --shims",
+    "build": "tsup src/cli.ts --format esm --target node22 --out-dir dist --clean --shims",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -52,7 +52,7 @@
     "vitest": "^4.1.10"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "publishConfig": {
     "access": "public"

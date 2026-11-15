@@ -89,7 +89,7 @@ This is a pnpm monorepo with four packages:
 
 | Package | What | Where |
 |---|---|---|
-| `@released/core` | Pure-TS library: algorithm, GitHub + GitLab providers, sanitizer, parser. Web Platform APIs only — runs in Node 20+ and Cloudflare Workers unchanged. | `packages/core/` |
+| `@released/core` | Pure-TS library: algorithm, GitHub + GitLab providers, sanitizer, parser. Web Platform APIs only — runs in Node 22+ and Cloudflare Workers unchanged. | `packages/core/` |
 | `git-released` | Node CLI (installs `git-released` + `released` bin aliases). Published as `git-released` because the unscoped `released` name was taken on npm. | `packages/cli/` |
 | `@released/web` | Cloudflare Worker — homepage + permalink page + JSON API. | `packages/web/` |
 | `@released/web-og` | Cloudflare Worker — OG-image PNG renderer (isolated bundle weight). Service Binding to `@released/web`. | `packages/web-og/` |
@@ -102,7 +102,7 @@ Three tiers — you only need the first to contribute:
 
 | Tier | What | Needed for |
 |---|---|---|
-| **Contribute** | Node 20+, `pnpm` | build, test, lint, push, open PRs |
+| **Contribute** | Node 22+, `pnpm` | build, test, lint, push, open PRs |
 | **Sharper local loop** *(optional)* | [`osv-scanner`](https://google.github.io/osv-scanner/installation/), [`gitleaks`](https://github.com/gitleaks/gitleaks#installing), `shellcheck`, `actionlint` | dependency CVE scan, secret scan, shell + workflow lint in your own loop |
 | **Run the CLI live** *(optional)* | `GITHUB_TOKEN` / `GITLAB_TOKEN` env vars | running `git-released` against rate-limited hosts. The test suite uses mocks, so this is **not** needed for dev |
 | **Publish / deploy** *(maintainer only)* | npm publish rights, Cloudflare API token + account, `gh` | only used by `release.yml`; contributors never touch this |
