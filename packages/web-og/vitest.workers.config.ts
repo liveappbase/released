@@ -13,9 +13,8 @@
 // which requires undici 8.x; undici 8.x builds a CacheStorage at module load
 // whose constructor calls node:worker_threads.markAsUncloneable — an API added
 // in Node 22. On Node 20 that import crashes outright with
-// "TypeError: webidl.util.markAsUncloneable is not a function". The product
-// itself still supports Node 20+ (the plain-Node suite in vitest.config.ts runs
-// on the full CI matrix); only this workerd render pool needs Node 22. So the
+// "TypeError: webidl.util.markAsUncloneable is not a function". The repo now
+// requires Node 22+ (engines), but an older local Node still reaches this file. So the
 // pool is dynamic-imported only on 22+, and skipped loudly below that rather
 // than failing the whole gate.
 import { defineConfig } from 'vitest/config';
