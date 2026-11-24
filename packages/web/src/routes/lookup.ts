@@ -93,7 +93,7 @@ export async function lookupRoute(c: Context): Promise<Response> {
   setTrack(req, { cache: 'miss' });
 
   try {
-    const result = await singleFlight(k, async () => {
+    const compute = async () => {
       // Within the flight, re-check cache to avoid duplicate compute under races.
       const reCached = await cache.get<LookupResult>(k);
       if (reCached) return reCached;
@@ -104,7 +104,9 @@ export async function lookupRoute(c: Context): Promise<Response> {
       const ttl = r.partial ? 60 : 30 * 60;
       await cache.put(k, r, ttl);
       return r;
-    });
+    };
+    // A user-token lookup gets its own flight namespace (#164).
+    const result = await singleFlight(await cache.flightKey(k), compute);
     setTrack(req, {
       outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
     });
