@@ -9,7 +9,7 @@ human-facing overview.
 and a curated set of GitLab hosts. It's a pnpm monorepo:
 
 - `packages/core` — pure-TS algorithm + providers. Web Platform APIs only;
-  runs in Node 20+ and Cloudflare Workers unchanged.
+  runs in Node 22+ and Cloudflare Workers unchanged.
 - `packages/cli` — Node CLI, published to npm as `git-released`.
 - `packages/web` — Cloudflare Worker: homepage, permalink pages, JSON API.
 - `packages/web-og` — Cloudflare Worker: OG-image PNG renderer. Service
