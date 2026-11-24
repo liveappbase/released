@@ -109,6 +109,10 @@ describe('makeWorkerCache', () => {
     expect(entry?.value).toEqual({ x: 7 });
     expect(entry?.ageSeconds).toBeGreaterThanOrEqual(41);
     expect(entry?.ageSeconds).toBeLessThanOrEqual(44);
+    // The raw write-time stamp is reported too: `ageSeconds` is floored from a
+    // read-time `Date.now()`, so an ordering test between two entries read at
+    // different instants needs the stamp itself (resolve.ts writtenNoEarlierThan).
+    expect(entry?.stampedAt).toBe(cachedAt);
   });
 
   it('getEntry returns null when there is no cached entry', async () => {
@@ -127,5 +131,10 @@ describe('makeWorkerCache', () => {
     const cache = makeWorkerCache(new Request('https://released-web.lukaso.workers.dev/'));
     const entry = await cache.getEntry('k');
     expect(entry?.ageSeconds).toBe(0);
+    // ...and reports the stamp as absent rather than inventing one, so an
+    // ordering test refuses the pair instead of comparing against a fake 0:
+    // `writtenNoEarlierThan` (resolve.ts) returns false when either stamp is
+    // null, so an unstamped marker/entry pair is always recomputed, never served.
+    expect(entry?.stampedAt).toBeNull();
   });
 });
