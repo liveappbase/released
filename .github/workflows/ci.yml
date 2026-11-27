@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@v7.1.0
         with:
           go-version: stable
 
